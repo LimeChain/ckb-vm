@@ -7,6 +7,17 @@ use std::io::{Cursor, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
+/// Base address offset for memory. Change this to make ckb-vm memory start
+/// at a different address (e.g., 0x80000000 for Jolt compatibility).
+/// All guest addresses will have this value subtracted before accessing storage.
+pub const BASE_ADDRESS: u64 = 0x81000000;
+
+/// Translate guest address to internal storage address
+#[inline(always)]
+fn translate(addr: u64) -> u64 {
+    addr.wrapping_sub(BASE_ADDRESS)
+}
+
 pub struct FlatMemory<R> {
     data: Vec<u8>,
     flags: Vec<u8>,
@@ -60,7 +71,7 @@ impl<R: Register> Memory for FlatMemory<R> {
         source: Option<Bytes>,
         offset_from_addr: u64,
     ) -> Result<(), Error> {
-        fill_page_data(self, addr, size, source, offset_from_addr)
+        fill_page_data(self, translate(addr), size, source, offset_from_addr)
     }
 
     fn fetch_flag(&mut self, page: u64) -> Result<u8, Error> {
@@ -102,7 +113,7 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn load8(&mut self, addr: &Self::REG) -> Result<Self::REG, Error> {
-        let addr = addr.to_u64();
+        let addr = translate(addr.to_u64());
         if addr.checked_add(1).ok_or(Error::MemOutOfBound)? > self.len() as u64 {
             return Err(Error::MemOutOfBound);
         }
@@ -113,7 +124,7 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn load16(&mut self, addr: &Self::REG) -> Result<Self::REG, Error> {
-        let addr = addr.to_u64();
+        let addr = translate(addr.to_u64());
         if addr.checked_add(2).ok_or(Error::MemOutOfBound)? > self.len() as u64 {
             return Err(Error::MemOutOfBound);
         }
@@ -125,7 +136,7 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn load32(&mut self, addr: &Self::REG) -> Result<Self::REG, Error> {
-        let addr = addr.to_u64();
+        let addr = translate(addr.to_u64());
         if addr.checked_add(4).ok_or(Error::MemOutOfBound)? > self.len() as u64 {
             return Err(Error::MemOutOfBound);
         }
@@ -137,7 +148,7 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn load64(&mut self, addr: &Self::REG) -> Result<Self::REG, Error> {
-        let addr = addr.to_u64();
+        let addr = translate(addr.to_u64());
         if addr.checked_add(8).ok_or(Error::MemOutOfBound)? > self.len() as u64 {
             return Err(Error::MemOutOfBound);
         }
@@ -149,8 +160,8 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn store8(&mut self, addr: &Self::REG, value: &Self::REG) -> Result<(), Error> {
-        let addr = addr.to_u64();
-        let page_indices = get_page_indices(addr.to_u64(), 1)?;
+        let addr = translate(addr.to_u64());
+        let page_indices = get_page_indices(addr, 1)?;
         set_dirty(self, &page_indices)?;
         let mut writer = Cursor::new(&mut self.data);
         writer.seek(SeekFrom::Start(addr as u64))?;
@@ -159,8 +170,8 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn store16(&mut self, addr: &Self::REG, value: &Self::REG) -> Result<(), Error> {
-        let addr = addr.to_u64();
-        let page_indices = get_page_indices(addr.to_u64(), 2)?;
+        let addr = translate(addr.to_u64());
+        let page_indices = get_page_indices(addr, 2)?;
         set_dirty(self, &page_indices)?;
         let mut writer = Cursor::new(&mut self.data);
         writer.seek(SeekFrom::Start(addr as u64))?;
@@ -169,8 +180,8 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn store32(&mut self, addr: &Self::REG, value: &Self::REG) -> Result<(), Error> {
-        let addr = addr.to_u64();
-        let page_indices = get_page_indices(addr.to_u64(), 4)?;
+        let addr = translate(addr.to_u64());
+        let page_indices = get_page_indices(addr, 4)?;
         set_dirty(self, &page_indices)?;
         let mut writer = Cursor::new(&mut self.data);
         writer.seek(SeekFrom::Start(addr as u64))?;
@@ -179,8 +190,8 @@ impl<R: Register> Memory for FlatMemory<R> {
     }
 
     fn store64(&mut self, addr: &Self::REG, value: &Self::REG) -> Result<(), Error> {
-        let addr = addr.to_u64();
-        let page_indices = get_page_indices(addr.to_u64(), 8)?;
+        let addr = translate(addr.to_u64());
+        let page_indices = get_page_indices(addr, 8)?;
         set_dirty(self, &page_indices)?;
         let mut writer = Cursor::new(&mut self.data);
         writer.seek(SeekFrom::Start(addr as u64))?;
@@ -193,7 +204,8 @@ impl<R: Register> Memory for FlatMemory<R> {
         if size == 0 {
             return Ok(());
         }
-        let page_indices = get_page_indices(addr.to_u64(), size)?;
+        let addr = translate(addr);
+        let page_indices = get_page_indices(addr, size)?;
         set_dirty(self, &page_indices)?;
         let slice = &mut self[addr as usize..(addr + size) as usize];
         slice.copy_from_slice(value);
@@ -204,7 +216,8 @@ impl<R: Register> Memory for FlatMemory<R> {
         if size == 0 {
             return Ok(());
         }
-        let page_indices = get_page_indices(addr.to_u64(), size)?;
+        let addr = translate(addr);
+        let page_indices = get_page_indices(addr, size)?;
         set_dirty(self, &page_indices)?;
         memset(&mut self[addr as usize..(addr + size) as usize], value);
         Ok(())
@@ -214,6 +227,7 @@ impl<R: Register> Memory for FlatMemory<R> {
         if size == 0 {
             return Ok(Bytes::new());
         }
+        let addr = translate(addr);
         if addr.checked_add(size).ok_or(Error::MemOutOfBound)? > self.memory_size() as u64 {
             return Err(Error::MemOutOfBound);
         }
