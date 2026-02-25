@@ -8,6 +8,7 @@ use std::cmp::min;
 use std::ptr;
 
 pub mod flat;
+pub mod offset;
 pub mod sparse;
 pub mod wxorx;
 
